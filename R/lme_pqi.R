@@ -1,6 +1,4 @@
 
-
-
 #' Calculate PQI using linear mixed effect model from q2e estimates
 #'
 #' @param q2e data.frame with q2e estimations per sample, replicate and peptide
@@ -22,8 +20,8 @@
 #'   \item sd: log(PQI) standard error
 #'   \item RanefModel: sample random effects, as calculated by \code{\link[nlme]{ranef}}.
 #'         It should be the same as Prediction, up to numerical precision
-#'   \item PQI.PredictSample and PQI.Model, exponentials of Prediction and RanefModel respectively.
-#'         They contain the PQI
+#'   \item PQI.Model, exponentials estimates. It is the PQI
+#'
 #' }
 #'
 #' \code{pep} data.frame contains:
@@ -57,44 +55,35 @@
 #' @export
 #'
 #' @examples
-lme_pqi = function(q2e, logq=TRUE, g=NULL, outdir=NULL,
+lme_pqi = function(q2e_vals, logq=TRUE, g=NULL, outdir=NULL,
                    return_model=F){
 
-  q2e = q2e %>%
-    mutate(Sample = as.factor(Sample), Replicates = as.factor(Replicates),
-           Peptides = as.factor(Peptides))
-  q2e = q2e %>% filter(Reliability>0) ## filter dataset to remove 0 reliabilities that resulted in Inf when taken the reciprocal
-
   if (logq){
-    q2e = q2e %>% mutate(resp = log(q))
+    q2e_vals = q2e_vals %>% mutate(resp = log(q2e))
   } else {
-    q2e = q2e %>% mutate(resp = q)
+    q2e_vals = q2e_vals %>% mutate(resp = q2e)
   }
-
-  ii = c("Sample","Replicates","Peptides","resp","Reliability")
-
-  q2e = q2e[complete.cases(q2e[,ii]),ii]
-  q2e$Sample = droplevels(q2e$Sample)
 
   ## mixed effect model
   if (g == "free"){
     m = lme(
-      resp~0+Peptides,
-      random=~1|Sample/Replicates,
-      weights=varComb(varPower(-1/2, form=~Reliability),
-                      varIdent(form=~1|Peptides)),
-      control=lmeControl(maxIter = 1000, msMaxIter = 1000, msMaxEval = 1000),
-      data=q2e)
+      resp~0+pep_number,
+      random = ~1|sample/replicate,
+      weights = varComb(
+        varPower(-1/2, form = ~reliability),
+        varIdent(form = ~1|pep_number)),
+      control = lmeControl(maxIter = 1000, msMaxIter = 1000, msMaxEval = 1000),
+      data = q2e_vals)
   } else {
     m = lme(
-      resp~0+Peptides,
-      random=~1|Sample/Replicates,
-      weight=varComb(
-        varFixed(~I(1/Reliability)),
-        varIdent(form=~1|Peptides)
+      resp~0+pep_number,
+      random = ~1|sample/replicate,
+      weight = varComb(
+        varFixed(~I(1/reliability)),
+        varIdent(form = ~1|pep_number)
       ),
       control=lmeControl(maxIter = 1000, msMaxIter = 1000, msMaxEval = 1000),
-      data=q2e)
+      data=q2e_vals)
     # m = lme(
     #   resp~0+Peptides,
     #   random=~1|Sample/Replicates,
@@ -109,9 +98,7 @@ lme_pqi = function(q2e, logq=TRUE, g=NULL, outdir=NULL,
   if (g != "free"){
     estimates_m$gamma = g
   }
-
   prediction = predict_pqi(m, estimates_m, logq=logq)
-
   ## mutate into the parent dataframe fitted values and residuals for plotting
   # q2e_m = q2e %>%
   # mutate(Fitted=fitted(m),
@@ -184,39 +171,32 @@ predict_pqi = function(model, estimates, new_q2e=NULL, logq=T){
 
   if (is.null(new_q2e)) {
     q2e = model$data
-    pqi = q2e %>% group_by(Sample) %>%
+    pqi = q2e %>% group_by(sample) %>%
       summarise(predict_sample(
-        Sample, Replicates, Peptides, Reliability, resp,
-        estimates)) %>%
-      mutate(PQI.Model=ranef(model)[['Sample']][,1])
+        sample, replicate, pep_number, reliability, resp, estimates)) %>%
+      mutate(PQI.Model = ranef(model)[['sample']][,1])
     if (logq) {
       pqi = pqi %>% mutate(
-        PQI.PredictSample = exp(PQI.PredictSample),
+        # PQI.PredictSample = exp(PQI.PredictSample),
         PQI.Model = exp(PQI.Model)
       )
     }
-    q2e_m = q2e %>%
-      mutate(Fitted=fitted(model),
-             Res=residuals(model, type = "pearson"),
-             Fitted0=fitted(model, level = 0),
-             Res0=residuals(model, level = 0, type = "pearson")) %>%
+    q2e_m = q2e %>% ungroup() %>%
+      mutate(Fitted = fitted(model),
+             Res = residuals(model, type = "pearson"),
+             Fitted0 = fitted(model, level = 0),
+             Res0 = residuals(model, level = 0, type = "pearson")) %>%
       as_tibble()
-    return(list('pep'=q2e_m, 'sample'=pqi))
+    return(list('pep' = q2e_m, 'sample' = pqi))
   } else {
     new_q2e = new_q2e %>%
-      mutate(Sample = as.factor(Sample), Replicates = as.factor(Replicates),
-             Peptides = as.factor(Peptides))
-    new_q2e = new_q2e %>% filter(Reliability>0) ## filter dataset to remove 0 reliabilities that resulted in Inf when taken the reciprocal
+      mutate(sample = as.factor(sample), replicate = as.factor(replicate),
+             pep_number = as.factor(pep_number))
+    # new_q2e = new_q2e %>% filter(residual>0) ## filter dataset to remove 0 reliabilities that resulted in Inf when taken the reciprocal
 
-    ii = c("Sample","Replicates","Peptides","Reliability","resp")
-
-    new_q2e = new_q2e[complete.cases(new_q2e[,ii]),ii]
-    new_q2e$Sample = droplevels(new_q2e$Sample)
-
-    pqi = new_q2e %>% group_by(Sample) %>%
+    pqi = new_q2e %>% group_by(sample) %>%
       summarise(predict_sample(
-        Sample, Replicates, Peptides, Reliability, resp,
-        estimates))
+        sample, replicate, pep_number, reliability, resp, estimates))
     q2e_m = new_q2e %>%
       mutate(
         predicted_q = predict(model, new_q2e)
@@ -227,8 +207,8 @@ predict_pqi = function(model, estimates, new_q2e=NULL, logq=T){
     q2e_m = q2e_m %>%
       mutate(
         Pred = exp(predicted_q),
-        Res = (resp-predicted_q)/sqrt(predicted_q))
-    return(list('sample'=pqi))
+        Res = (resp - predicted_q)/sqrt(predicted_q))
+    return(list('sample' = pqi))
   }
 
 }
@@ -261,12 +241,12 @@ pept_qqplot = function(pqi_m, title="", peptides_user=NULL, label_idx=2,
   names(pept_labels) = pept_number
 
   qq_plot = ggplot(pqi_m) +
-    geom_qq(aes(sample=Res, color=Peptides)) +
-    geom_qq_line(aes(sample=Res, color=Peptides)) +
+    geom_qq(aes(sample=Res, color = pep_number)) +
+    geom_qq_line(aes(sample = Res, color = pep_number)) +
     # facet_wrap(~Peptides, scales="free") +
     facet_wrap(
-      ~Peptides,
-      labeller = labeller(Peptides=as_labeller(pept_labels, label_func))) +
+      ~pep_number,
+      labeller = labeller(pep_number = as_labeller(pept_labels, label_func))) +
     theme(legend.key.size=unit(1, "cm"),
           legend.text = element_text(size = 15),
           strip.text = element_text(size = 10)) +
@@ -303,18 +283,18 @@ fvsr = function(pqi_m, title="", peptides_user=NULL, label_idx=2,
   names(pept_labels) = pept_number
 
   fvsr_plot = ggplot(pqi_m) +
-    geom_point(aes(x=exp(Fitted), y=Res, color=Peptides),
-               size=2.5, alpha=0.8) +
+    geom_point(aes(x = exp(Fitted), y = Res, color=pep_number),
+               size = 2.5, alpha = 0.8) +
     # facet_wrap(~Peptides, scales="free") +
     facet_wrap(
-      ~Peptides,
-      labeller = labeller(Peptides=as_labeller(pept_labels, label_func))) +
+      ~pep_number,
+      labeller = labeller(pep_number = as_labeller(pept_labels, label_func))) +
     ylab("standardized residuals") +
     xlab("predicted q peptide") +
     theme(legend.key.size=unit(1, "cm"),
           legend.text = element_text(size = 15),
           strip.text = element_text(size = 10)) +
-    guides(colour = guide_legend(override.aes = list(size=4))) +
+    guides(colour = guide_legend(override.aes = list(size = 4))) +
     ggtitle(title)
   return(fvsr_plot)
 }
