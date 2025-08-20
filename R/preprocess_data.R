@@ -368,6 +368,7 @@ calc_n_frac_peaks = function(x, n_isopeaks, min_isopeaks) {
 #' @param n_isopeaks
 #' @param min_isopeaks
 #' @param ...
+#' @param marker_order
 #'
 #' @return
 #' @export
@@ -375,12 +376,12 @@ calc_n_frac_peaks = function(x, n_isopeaks, min_isopeaks) {
 #' @examples
 plot_n_peaks_per_peptide = function(peaks, n_isopeaks, min_isopeaks, marker_order, ...) {
 
-  if (is.null(marker_odrer)) {
-    marker_order = unique(peaks$pept_name)
+  if (is.null(marker_order)) {
+    marker_order = unique(peaks$pep_number)
   }
 
   a = peaks %>%
-    group_by(pept_name, ...) %>%
+    group_by(pep_number, ...) %>%
     summarise(calc_n_frac_peaks(n_peaks, n_isopeaks, min_isopeaks)) %>%
     ungroup() %>%
     pivot_longer(cols = starts_with('frac'), names_to='n_of_peaks',
@@ -388,26 +389,28 @@ plot_n_peaks_per_peptide = function(peaks, n_isopeaks, min_isopeaks, marker_orde
     mutate(
       n_of_peaks = factor(
         as.integer(n_of_peaks), levels=c(min_isopeaks:n_isopeaks)),
-      pept_name = factor(pept_name, levels=marker_order))
+      pep_number = factor(pep_number, levels=marker_order))
 
   x = min_isopeaks:n_isopeaks
   mapped = (x - min(x)) / max(x - min(x)) * (9 - 1) + 1
 
 
   ggplot(a) +
-    geom_col(aes(x=pept_name, y=fraction, fill=n_of_peaks),
+    geom_col(aes(x=pep_number, y=fraction, fill=n_of_peaks),
              position='stack') +
     scale_fill_grey(
       '# of isotopic\npeaks',
       start=0.8, end=0.3) +
     ylab('Fraction of samples') +
     xlab('peptide') +
+    scale_x_discrete(guide = guide_axis(n.dodge = 1, angle=45)) +
     facet_wrap(vars(...)) +
     theme_bw() +
     theme(
       panel.grid.minor=element_blank(),
-      axis.text.x=element_text(
-        angle=90, vjust = 0.75, hjust=1, size=10))
+      # axis.text.x=element_text(
+      #   angle=40, vjust = 0.7, hjust=0.6, size=10))
+      axis.text.x=element_text(size=10, hjust=1))
 }
 
 
@@ -433,28 +436,28 @@ plot_preprocessing = function(sp, peaks, peptides_user, n_isopeaks, norm_func=NU
   sp_mask = rep(NA, nrow(sp))
   for (i in seq_along(peptides_user$mass)) {
     mono_mz = peptides_user$mass[i]
-    s = (sp$mz > (mono_mz-2)) & (sp$mz < (mono_mz+6))
-    sp_mask[s] = peptides_user$pept_name[i]
-    p = (peaks$mz > (mono_mz-2)) & (peaks$mz < (mono_mz+6))
+    s = (sp$mz > (mono_mz-3)) & (sp$mz < (mono_mz+6))
+    sp_mask[s] = peptides_user$pept_number[i]
+    p = (peaks$mz > (mono_mz-3)) & (peaks$mz < (mono_mz+6))
     peaks_mask[[i]] = p
   }
   peaks_mask = Reduce('|', peaks_mask)
   peaks = peaks[peaks_mask,]
 
-  sp$pept_name = sp_mask
-  sp = sp[!is.na(sp$pept_name),]
+  sp$pep_number = sp_mask
+  sp = sp[!is.na(sp$pep_number),]
 
   sort_idx = order(peptides_user$mass)
   sp = sp %>%
-    group_by(spectra_name, pept_name) %>%
+    group_by(spectra_name, pep_number) %>%
     mutate(norm_int = intensity/norm_func(intensity_SavitzkyGolay_bl_corr_SNIP, na.rm = TRUE),
            norm_int_wma = intensity_WeightedMovingAverage/norm_func(intensity_SavitzkyGolay_bl_corr_SNIP, na.rm = TRUE),
            norm_int_bl = baseline_SNIP/norm_func(intensity_SavitzkyGolay_bl_corr_SNIP, na.rm = TRUE),
            norm_int_bl_corr = intensity_SavitzkyGolay_bl_corr_SNIP/norm_func(intensity_SavitzkyGolay_bl_corr_SNIP, na.rm = TRUE)) %>%
     ungroup() %>%
-    mutate(pept_name = factor(pept_name, levels=peptides_user$pept_name[sort_idx]))
+    mutate(pep_number = factor(pep_number, levels=peptides_user$pept_number[sort_idx]))
   peaks = peaks %>%
-    mutate(pept_name = factor(pept_name, levels=peptides_user$pept_name[sort_idx]))
+    mutate(pep_number = factor(pep_number, levels=peptides_user$pept_number[sort_idx]))
   spp = ggplot(sp) +
     geom_vline(aes(xintercept=mz), data=peaks, color='grey', linetype='dashed',
                linewidth=0.5) +
@@ -475,11 +478,12 @@ plot_preprocessing = function(sp, peaks, peptides_user, n_isopeaks, norm_func=NU
                data = peaks) +
     geom_line(aes(x=mz, y=theor_deam), size=1, color='#26828EFF',
                data = peaks) +
-    facet_grid(spectra_name~pept_name, scales = 'free') +
+    facet_grid(spectra_name~pep_number, scales = 'free') +
     ylab('Normalized intensity') +
     xlab('') +
     theme_bw() +
     theme(panel.grid.minor = element_blank(),
+          strip.text = element_text(size=12),
           panel.grid.major = element_blank(),
           axis.text.y = element_blank(),
           axis.ticks.y = element_blank())
